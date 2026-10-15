@@ -1,7 +1,11 @@
 import base64
 
 from hometabs.agent import (
+    ASIDE_TOOLS_RULE,
+    EXEC_TOOL,
+    MEMORY_SEARCH_TOOL,
     REPL_TOOL,
+    SYSTEM_PROMPT,
     BrowsingAgent,
     extract_images,
     summarize_tool_input,
@@ -38,12 +42,34 @@ def test_summarize_tool_input():
     assert summarize_tool_input("Skill", {"skill": "hometabs:1password"}) == "skill: 1password"
 
 
+def test_summarize_memory_search_and_exec():
+    assert (
+        summarize_tool_input(MEMORY_SEARCH_TOOL, {"queries": ["bank accounts", "x"]})
+        == "memory: bank accounts"
+    )
+    assert summarize_tool_input(MEMORY_SEARCH_TOOL, {"queries": []}) == "memory search"
+    assert (
+        summarize_tool_input(EXEC_TOOL, {"prompt": "Check my\n  inbox", "session_id": "s1"})
+        == "Aside agent: Check my inbox"
+    )
+    assert len(summarize_tool_input(EXEC_TOOL, {"prompt": "x" * 500})) == 80
+    assert summarize_tool_input(EXEC_TOOL, {}) == "Aside agent"
+
+
+def test_system_prompt_mentions_aside_tools():
+    assert "{tool}" not in SYSTEM_PROMPT
+    for name in ("`repl`", "`memory_search`", "`exec`", "Aside desktop app"):
+        assert name in SYSTEM_PROMPT
+
+
 def test_options_lock_down_tools():
     agent = BrowsingAgent(AgentConfig(oauth_token="tok", aside_command="/bin/aside"))
     opts = agent.build_options(resume=None)
     assert opts.model == "claude-sonnet-5-5" and opts.effort == "medium"
-    # Only built-in tool is Skill; only auto-approved tool is the aside repl.
-    assert opts.tools == ["Skill"] and opts.allowed_tools == [REPL_TOOL]
+    # Only built-in tool is Skill; every aside MCP tool (and nothing else) is
+    # auto-approved, including tools a future Aside adds.
+    assert opts.tools == ["Skill"] and opts.allowed_tools == [ASIDE_TOOLS_RULE] == ["mcp__aside"]
+    assert "Today's date is 2" in opts.system_prompt and "{" not in opts.system_prompt
     assert opts.permission_mode == "dontAsk"
     assert opts.setting_sources == [] and opts.strict_mcp_config
     assert opts.mcp_servers["aside"]["command"] == "/bin/aside"
@@ -95,7 +121,7 @@ def test_cli_command_for_skills(plugin):
 
     assert flag("--tools") == "Skill"
     assert flag("--allowedTools") == (
-        f"{REPL_TOOL},Skill(hometabs:sign-in),Skill(hometabs:1password)"
+        f"{ASIDE_TOOLS_RULE},Skill(hometabs:sign-in),Skill(hometabs:1password)"
     )
     assert flag("--plugin-dir") == str(plugin.path)
     assert "--setting-sources=" in cmd

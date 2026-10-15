@@ -39,14 +39,16 @@ first.
 
 ## Features
 
-- **Real browser control.** The agent's browser tool is Aside's `repl`
-  (Playwright-style JavaScript in your Aside Browser), so it sees your tabs,
-  cookies and logins.
+- **Real browser control.** The agent can use every tool the Aside MCP server
+  exposes, now and in future Aside versions: `repl` (Playwright-style
+  JavaScript in your Aside Browser, so it sees your tabs, cookies and logins),
+  `memory_search` (Aside's notes about you, your accounts and sites) and
+  `exec` (hands a task to Aside's own agent).
 - **Allowlist.** Only the Telegram user IDs you list can use it; it won't start
   without the list.
 - **Locked down.** No shell or file tools, no `~/.claude` settings, CLAUDE.md,
-  plugins or other MCP servers: just the aside `repl` and an allowlisted set of
-  skills.
+  plugins or other MCP servers: just the aside MCP tools and an allowlisted set
+  of skills.
 - **Asks first.** Instructed to confirm in chat before purchases, sending
   messages, posting, submitting forms, deleting, changing settings or accepting
   terms.
@@ -231,7 +233,7 @@ flowchart LR
         agent["agent.py<br/>BrowsingAgent<br/>(ClaudeSDKClient per chat)"]
         state[(".state/<br/>sessions, settings,<br/>model cache, plugin")]
         cli["Claude Code CLI<br/>(bundled with the SDK)"]
-        mcp["aside mcp<br/>(repl tool)"]
+        mcp["aside mcp<br/>(repl, memory_search,<br/>exec, ...)"]
         browser["Aside Browser<br/>your tabs and logins"]
         bot --> agent
         bot <--> state
@@ -252,8 +254,12 @@ When you send a message:
    Code CLI with a fixed system prompt, the aside MCP server, the skills plugin
    and an environment holding only the chosen Claude credential, resuming the
    chat's saved session if there is one.
-3. Claude works in a loop, calling the aside `repl` tool to read and act on
-   pages. Each tool call updates the "Working… step n" status message (at most
+3. Claude works in a loop, calling the aside MCP tools: mostly `repl` to read
+   and act on pages, `memory_search` when Aside's notes about you would help,
+   and `exec` when handing the whole task to Aside's own agent is clearly
+   better. An `exec` task runs on your Aside plan and may wait for a
+   confirmation that can only be answered in the Aside desktop app; the agent
+   is told to say so. Each tool call updates the "Working… step n" status message (at most
    every 2 seconds).
 4. The final reply is converted to Telegram HTML, split if needed and sent
    with up to five screenshots. The session ID is saved so the conversation

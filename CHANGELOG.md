@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The LaunchAgent example is now `docs/hometabs.plist.example` (label
   `com.hometabs.bot`, log `~/Library/Logs/hometabs.log`).
 
+- The agent may now use every tool of the aside MCP server (permission rule
+  `mcp__aside` instead of `mcp__aside__repl`), including `memory_search`,
+  `exec` and any tool future Aside versions add. The system prompt describes
+  when to use `repl`, `memory_search` and `exec`, and progress messages
+  summarize memory searches and Aside agent tasks. Because the system prompt
+  changed, saved conversations start fresh once. See SECURITY.md for what
+  this allows.
+
 ### Added
 
 - `ANTHROPIC_API_KEY` support, now the recommended way to authenticate.

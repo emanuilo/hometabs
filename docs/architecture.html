@@ -83,7 +83,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
   <dl class="facts">
     <div><dt>Model</dt><dd>claude-sonnet-5-5 · effort medium by default, switchable with /model and /effort</dd></div>
     <div><dt>Claude auth</dt><dd>ANTHROPIC_API_KEY (recommended), else CLAUDE_CODE_OAUTH_TOKEN, else the local Claude Code login</dd></div>
-    <div><dt>Agent tools</dt><dd>mcp__aside__repl + Skill (sign-in, 1Password)</dd></div>
+    <div><dt>Agent tools</dt><dd>every aside MCP tool (mcp__aside: repl, memory_search, exec, …) + Skill (sign-in, 1Password)</dd></div>
     <div><dt>Who can use it</dt><dd>User IDs in ALLOWED_USER_IDS</dd></div>
   </dl>
 
@@ -162,7 +162,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
 
           <rect class="box" x="720" y="262" width="230" height="60" rx="8"/>
           <text class="t" x="734" y="285">aside mcp</text>
-          <text class="s" x="734" y="303">stdio server · one tool: repl</text>
+          <text class="s" x="734" y="303">stdio · repl, memory_search, exec, …</text>
 
           <rect class="box" x="720" y="360" width="230" height="60" rx="8"/>
           <text class="t" x="734" y="383">Aside Browser</text>
@@ -185,7 +185,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
 
           <!-- CLI -> aside -->
           <line class="edge" x1="835" y1="234" x2="835" y2="260" marker-end="url(#a)"/>
-          <text class="lbl" x="845" y="251">repl(code)</text>
+          <text class="lbl" x="845" y="251">tool calls</text>
           <line class="edge" x1="835" y1="322" x2="835" y2="358" marker-end="url(#a)"/>
           <text class="lbl" x="845" y="344">drives tabs</text>
 
@@ -202,7 +202,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
     <h2>What happens when you send a message</h2>
     <figure>
       <div class="scroll">
-        <svg viewBox="0 0 980 690" role="img" aria-label="Sequence: your message reaches the bot, passes the allowlist and per-chat lock, goes to the agent core, which queries Claude. Claude loops calling the aside repl tool while the bot shows progress, then the final result is saved and sent back as text and photos.">
+        <svg viewBox="0 0 980 690" role="img" aria-label="Sequence: your message reaches the bot, passes the allowlist and per-chat lock, goes to the agent core, which queries Claude. Claude loops calling the aside tools (mostly repl) while the bot shows progress, then the final result is saved and sent back as text and photos.">
           <defs>
             <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker>
           </defs>
@@ -265,7 +265,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
           <text class="m" x="210" y="349">loop · until model answers</text>
 
           <line class="edge" x1="690" y1="375" x2="878" y2="375" marker-end="url(#b)"/>
-          <text class="lbl" x="785" y="368" text-anchor="middle">repl(code, title)</text>
+          <text class="lbl" x="785" y="368" text-anchor="middle">repl(code, title), …</text>
 
           <line class="edge dash" x1="880" y1="408" x2="692" y2="408" marker-end="url(#b)"/>
           <text class="lbl" x="785" y="401" text-anchor="middle">page text / screenshot</text>
