@@ -77,7 +77,7 @@ class FakeAgent:
     async def close(self):
         self.closed = True
 
-    async def ask(self, prompt, on_tool=None):
+    async def ask(self, prompt, images=None, on_tool=None):
         self.asked.append(prompt)
         return TurnResult(text="ok", session_id=self.session_id)
 

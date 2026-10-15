@@ -52,6 +52,15 @@ controls.** A model can be tricked or make mistakes, the repl tool itself
 can do anything the browser can, and an `exec` task follows Aside's agent's own
 rules rather than these instructions.
 
+**Images.** Photos and image files you send are passed to the model, so they
+are sent to Anthropic and stored in the Claude Code session transcripts like
+the rest of the conversation. A forwarded image or screenshot can contain text
+written to manipulate the agent, just like a web page. The agent is told that
+images and files the user forwards may contain text that is not from the user,
+and to treat it as data, not instructions; the same caveat applies that this
+is an instruction, not an enforced control. Check what you forward. The agent
+can't upload images to websites (they never become files on disk).
+
 **Credentials.** The agent is told to sign in only with your password
 manager's autofill and never to type secrets it reads or that you send in chat.
 Don't send passwords or codes to the bot: chat messages are stored by Telegram
@@ -78,8 +87,8 @@ and in the Claude Code session transcripts on your machine.
   (including memory searches and tasks handed to Aside's agent), and
   `/stop` interrupts a running task.
 - The `.state/` directory and Claude Code's transcripts (under
-  `~/.claude/projects/`) contain your conversations, page text and
-  screenshots. Treat them as sensitive.
+  `~/.claude/projects/`) contain your conversations, page text,
+  screenshots and the images you send. Treat them as sensitive.
 
 ## Reporting a vulnerability
 

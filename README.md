@@ -54,6 +54,9 @@ first.
   terms.
 - **Password manager sign-in.** Can sign in with the browser's 1Password
   autofill when a task needs it; never types secrets from chat.
+- **Send images.** Photos, screenshots and image files (PNG, JPEG, WebP, GIF,
+  HEIC, ...) go to the agent with your caption as the instruction; an album
+  becomes one request. See [Sending images](#sending-images).
 - **Persistent conversations.** One conversation per chat, resumed after
   restarts.
 - **Live progress.** A typing indicator, a status line with the current browser
@@ -205,6 +208,30 @@ Messages sent while a task runs are queued and handled in order (one agent turn
 per chat at a time). Messages sent while the bot wasn't running are dropped on
 startup, so stale requests don't run in your browser.
 
+### Sending images
+
+Send a photo, a screenshot or an image file (sent "as file", uncompressed) and
+the caption is the instruction, e.g. a screenshot of an error with *"what does
+this mean?"* or a photo of a bill with *"pay this on the utility's site"*.
+Without a caption, the agent describes the image and asks what to do with it.
+
+- **Albums** (several photos sent together) become one request with all the
+  images and the album's caption.
+- Up to 10 images per request. Telegram lets bots download files up to
+  20 MB; larger files get a reply saying so.
+- JPEG, PNG, GIF and WebP are sent as they are when small enough; other
+  formats (HEIC, BMP, TIFF, ...) are converted to JPEG, and large images are
+  scaled down to 1568 px on the long edge (Claude's own working size) and kept
+  under Claude's per-image size limit.
+- Images are queued like text messages, and `/stop` and `/new` drop them too.
+- The agent **sees** the images but can't **upload** them to websites: they
+  are passed to the model, not saved as files the browser could attach.
+- Voice messages, videos, stickers and other files get a short reply that
+  only text and images are supported.
+
+Images are sent to Anthropic along with the conversation and are stored in the
+Claude Code session transcripts. See [SECURITY.md](SECURITY.md).
+
 ### Model and effort
 
 The model list isn't hardcoded: `/model` fetches it from Anthropic's
@@ -339,6 +366,7 @@ src/hometabs/
   bot.py         # Telegram handlers, per-chat locks, progress, /model, /effort
   config.py      # .env loading and validation
   formatting.py  # message splitting, Markdown -> Telegram HTML
+  images.py      # incoming images: size limits, conversion, downscaling
   models.py      # /v1/models discovery (model list, effort levels, cache)
   skills.py      # builds the skills plugin (our skills + Aside's)
   plugin/        # plugin template: manifest + skills we ship

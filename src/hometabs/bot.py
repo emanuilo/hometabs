@@ -8,6 +8,7 @@ import io
 import json
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -36,17 +37,37 @@ from telegram.ext import (
 from .agent import BrowsingAgent, Image, ToolStep, TurnResult, instructions_fingerprint
 from .config import Settings
 from .formatting import SAFE_CHUNK_LEN, TELEGRAM_MAX_LEN, markdown_to_telegram_html, split_message
+from .images import (
+    MAX_IMAGES_PER_TURN,
+    TELEGRAM_DOWNLOAD_LIMIT,
+    ImageError,
+    normalize_image,
+    per_image_budget,
+    too_large_message,
+)
 from .models import SDK_EFFORT_LEVELS, ModelCatalog, ModelInfo, resolve_effort
 from .skills import build_plugin
 
 MAX_PHOTOS_PER_TURN = 5
 STATUS_EDIT_INTERVAL_S = 2.0
 TYPING_INTERVAL_S = 4.0
+# Album items arrive as separate updates; wait this long after the last one.
+ALBUM_DEBOUNCE_S = 1.2
+DEFAULT_IMAGE_PROMPT = (
+    "The user sent this image without a caption. "
+    "Describe what you see and ask what they want to do with it."
+)
+DEFAULT_ALBUM_PROMPT = (
+    "The user sent these images without a caption. "
+    "Describe what you see and ask what they want to do with them."
+)
+UNSUPPORTED_TEXT = "I can handle text and images (photos or image files) for now."
 _NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 HELP_TEXT = (
     "I'm a browsing assistant driving your Aside browser.\n\n"
-    'Just tell me what to do, e.g. "open example.com and tell me the heading".\n\n'
+    'Just tell me what to do, e.g. "open example.com and tell me the heading". '
+    "You can also send photos or screenshots, with a caption saying what to do.\n\n"
     "/new - start a fresh conversation\n"
     "/stop - interrupt the current task (and drop queued messages)\n"
     "/model - show or change the Claude model\n"
@@ -173,6 +194,47 @@ class ChatState:
     epoch: int = 0
 
 
+@dataclass
+class PendingAlbum:
+    """Items of one media group, collected until no new item arrives."""
+
+    epoch: int
+    messages: list[Message] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class MediaRef:
+    """The Telegram file to download for one image message."""
+
+    file_id: str
+    file_size: int | None
+    label: str
+
+
+def media_ref(msg: Message) -> MediaRef | None:
+    """The image to download from *msg*: the largest photo size, or an image
+    document (a file sent uncompressed). None for anything else."""
+    if msg.photo:
+        best = max(msg.photo, key=lambda p: (p.width * p.height, p.file_size or 0))
+        return MediaRef(best.file_id, best.file_size, "That photo")
+    doc = msg.document
+    if doc is not None and (doc.mime_type or "").startswith("image/"):
+        return MediaRef(doc.file_id, doc.file_size, doc.file_name or "That file")
+    return None
+
+
+def media_prompt(messages: Sequence[Message], n_images: int) -> str:
+    """The captions of an album (usually only on the first item), or a default."""
+    captions: list[str] = []
+    for m in messages:
+        caption = (m.caption or "").strip()
+        if caption and caption not in captions:
+            captions.append(caption)
+    if captions:
+        return "\n\n".join(captions)
+    return DEFAULT_ALBUM_PROMPT if n_images > 1 else DEFAULT_IMAGE_PROMPT
+
+
 class HometabsBot:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -193,6 +255,7 @@ class HometabsBot:
             settings.agent.api_key, settings.agent.oauth_token, self.state_dir / "models_cache.json"
         )
         self._bg_tasks: set[asyncio.Task] = set()
+        self._albums: dict[tuple[int, str], PendingAlbum] = {}
 
     def _chat(self, chat_id: int) -> ChatState:
         return self.chats.setdefault(chat_id, ChatState())
@@ -397,6 +460,9 @@ class HometabsBot:
         # CallbackQueryHandler takes no user filter: on_callback checks the allowlist.
         app.add_handler(CallbackQueryHandler(self.on_callback))
         app.add_handler(MessageHandler(allowed & filters.TEXT & ~filters.COMMAND, self.on_text))
+        app.add_handler(
+            MessageHandler(allowed & (filters.PHOTO | filters.Document.IMAGE), self.on_media)
+        )
         # Everyone else (and unsupported message types) lands here.
         app.add_handler(MessageHandler(filters.ALL, self.on_other))
         app.add_error_handler(self.on_error)
@@ -547,20 +613,116 @@ class HometabsBot:
                 )
             return
         if msg is not None:
-            await msg.reply_text("I can only handle text messages for now.")
+            await msg.reply_text(UNSUPPORTED_TEXT)
 
     async def on_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         msg = update.effective_message
         chat_id = update.effective_chat.id
+        await self._enqueue(context, msg, chat_id, self._chat(chat_id).epoch, msg.text)
+
+    async def on_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """A photo or image file. Album items are collected into one turn."""
+        msg = update.effective_message
+        chat_id = update.effective_chat.id
+        epoch = self._chat(chat_id).epoch
+        group = msg.media_group_id
+        if not group:
+            await self._media_turn(context, chat_id, [msg], epoch)
+            return
+        key = (chat_id, group)
+        album = self._albums.get(key)
+        if album is not None:
+            album.messages.append(msg)  # the first item's handler sends the turn
+            return
+        # This handler owns the album: wait until no new item arrives for
+        # ALBUM_DEBOUNCE_S, then send all of them as one turn. Everything
+        # between awaits runs atomically on the event loop, so items can't be
+        # lost: they either join before the album is popped or start a new one.
+        album = self._albums[key] = PendingAlbum(epoch=epoch, messages=[msg])
+        try:
+            while True:
+                seen = len(album.messages)
+                await asyncio.sleep(ALBUM_DEBOUNCE_S)
+                if len(album.messages) == seen:
+                    break
+        finally:
+            self._albums.pop(key, None)
+        messages = sorted(album.messages, key=lambda m: m.message_id)
+        await self._media_turn(context, chat_id, messages, album.epoch)
+
+    async def _media_turn(
+        self, context: ContextTypes.DEFAULT_TYPE, chat_id: int, messages: list[Message], epoch: int
+    ) -> None:
+        """Download and normalize the images of *messages*, then queue one turn."""
+        bot = context.bot
+        first = messages[0]
+        refs = [ref for ref in (media_ref(m) for m in messages) if ref is not None]
+        notes: list[str] = []
+        if len(refs) > MAX_IMAGES_PER_TURN:
+            notes.append(f"Only the first {MAX_IMAGES_PER_TURN} images are used.")
+            refs = refs[:MAX_IMAGES_PER_TURN]
+        with contextlib.suppress(TelegramError):
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
+        images: list[Image] = []
+        max_bytes = per_image_budget(len(refs))
+        for ref in refs:
+            if self._chat(chat_id).epoch != epoch:
+                return  # /stop or /new while downloading
+            try:
+                images.append(await self._download_image(bot, ref, max_bytes))
+            except ImageError as exc:
+                notes.append(str(exc))
+        if notes:
+            skipped = len(refs) - len(images)
+            if images and skipped:
+                notes.append(f"Continuing with {len(images)} of {len(refs)} images.")
+            await self._send_text(bot, chat_id, "\n".join(notes), reply_to=first)
+        if not images:
+            return
+        prompt = media_prompt(messages, len(images))
+        await self._enqueue(context, first, chat_id, epoch, prompt, images)
+
+    @staticmethod
+    async def _download_image(bot, ref: MediaRef, max_bytes: int) -> Image:
+        """Download one image and normalize it for Claude. Raises ImageError
+        with a user-facing message."""
+        if ref.file_size and ref.file_size > TELEGRAM_DOWNLOAD_LIMIT:
+            raise ImageError(too_large_message(ref.file_size, ref.label))
+        try:
+            tg_file = await bot.get_file(ref.file_id)
+            data = await tg_file.download_as_bytearray()
+        except BadRequest as exc:
+            if "too big" in str(exc).lower():
+                raise ImageError(too_large_message(ref.file_size or 0, ref.label)) from exc
+            raise ImageError(f"I couldn't download {ref.label.lower()}: {exc}") from exc
+        except TelegramError as exc:
+            raise ImageError(f"I couldn't download {ref.label.lower()}: {exc}") from exc
+        # Decoding and re-encoding is CPU-bound; keep the event loop free.
+        return await asyncio.to_thread(normalize_image, bytes(data), max_bytes=max_bytes)
+
+    async def _enqueue(
+        self,
+        context: ContextTypes.DEFAULT_TYPE,
+        msg: Message,
+        chat_id: int,
+        epoch: int,
+        prompt: str,
+        images: Sequence[Image] = (),
+    ) -> None:
+        """Run one turn under the chat's lock, queueing behind a running one.
+        *epoch* is the chat's epoch when the message arrived; /stop and /new
+        bump it so messages from before them are dropped."""
         state = self._chat(chat_id)
-        epoch = state.epoch
+        if state.epoch != epoch:
+            logger.info("Dropping message sent before /stop or /new in chat {}", chat_id)
+            return
         if state.lock.locked():
             await msg.reply_text("Queued; I'll get to it after the current task. (/stop to cancel)")
         async with state.lock:
             if state.epoch != epoch:
                 logger.info("Dropping message queued before /stop or /new in chat {}", chat_id)
                 return
-            await self._run_turn(context, msg, state, chat_id)
+            await self._run_turn(context, msg, state, chat_id, prompt, images)
 
     async def on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.opt(exception=context.error).error("Unhandled error while processing an update")
@@ -568,7 +730,13 @@ class HometabsBot:
     # -- turn ------------------------------------------------------------
 
     async def _run_turn(
-        self, context: ContextTypes.DEFAULT_TYPE, msg: Message, state: ChatState, chat_id: int
+        self,
+        context: ContextTypes.DEFAULT_TYPE,
+        msg: Message,
+        state: ChatState,
+        chat_id: int,
+        prompt: str,
+        images: Sequence[Image] = (),
     ) -> None:
         bot = context.bot
         if state.agent is not None and not self._agent_is_current(state.agent):
@@ -603,7 +771,9 @@ class HometabsBot:
                 logger.debug("status update failed: {}", exc)
 
         try:
-            result = await agent.ask(msg.text, on_tool=on_tool)
+            if images:
+                logger.info("Turn with {} image(s) in chat {}", len(images), chat_id)
+            result = await agent.ask(prompt, images=list(images) or None, on_tool=on_tool)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Agent turn failed in chat {}", chat_id)
             # The CLI subprocess may be dead; reconnect (resuming) next time.

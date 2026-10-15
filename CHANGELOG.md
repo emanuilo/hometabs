@@ -31,6 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Image input: send photos, screenshots or image files (sent uncompressed) and
+  the caption becomes the instruction (without one, the agent describes the
+  image and asks what to do). Albums are collected into one request (up to 10
+  images). Files over Telegram's 20 MB bot download limit get a clear reply.
+  JPEG/PNG/GIF/WebP pass through when small enough; other formats (HEIC via
+  `pillow-heif`, BMP, TIFF, ...) are converted to JPEG, and images are scaled
+  to at most 1568 px on the long edge and kept to 1 MB each and 6 MB per
+  turn (the API resends earlier images on every turn and caps a request at
+  32 MB). Images reach the model as base64 image content blocks; the agent can
+  see them but can't upload them to websites. Image turns share the text
+  queue, `/stop`, `/new`, progress and reply handling. Other media (voice,
+  video, stickers, non-image files) get a short "text and images" reply.
+  New dependencies: `pillow`, `pillow-heif`. The system prompt changed, so
+  saved conversations start fresh once.
 - `ANTHROPIC_API_KEY` support, now the recommended way to authenticate.
   Precedence: `ANTHROPIC_API_KEY` > `CLAUDE_CODE_OAUTH_TOKEN` > local Claude
   Code login. Every credential/provider variable is still scrubbed and exactly
