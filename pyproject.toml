@@ -59,6 +59,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "code-shape-kit[tools] ; python_full_version >= '3.11.4'",
     "pytest>=9.1.1",
     "ruff>=0.16.10",
 ]
@@ -78,7 +79,7 @@ select = [
     "F",   # pyflakes
     "I",   # isort
     "B",   # flake8-bugbear
-    "BLE", # blind except (deliberate ones are marked noqa)
+    "BLE", # blind except (deliberate ones log the traceback with logger.exception)
     "UP",  # pyupgrade
     "SIM", # flake8-simplify
     "RUF", # ruff-specific
@@ -88,5 +89,215 @@ ignore = [
     "RUF003", # ambiguous unicode in comments: box-drawing section rules
 ]
 
+# loguru's logger, so `except Exception: logger.exception(...)` counts as logged
+# (BLE001), as it does in code-shape's own ruff run.
+logger-objects = ["loguru.logger"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["hometabs"]
+
+[tool.uv.sources]
+code-shape-kit = { git = "https://github.com/emanuilo/code-shape-kit", rev = "v0.3.0" }
+
+# ---------------------------------------------------------------------------
+# Added by `code-shape init` (code-shape-kit 0.3.0). The packages, config modules
+# and layers below are best guesses from today's code: review them.
+# ---------------------------------------------------------------------------
+
+# What to fill in:
+#   packages, config_modules           - always
+#   banned_api, concepts               - recommended (examples are commented out)
+#   limits                             - only where a default is wrong for your project
+# Every limit shown is the kit's default, so you can delete any line you don't change.
+# Why each number: see the comment after it.
+
+[tool.shape]
+packages = ["hometabs"]  # found in the project
+src = "src"  # the src/ layout was found
+tests = "tests"
+# The ONLY modules allowed to read environment variables (os.environ / os.getenv).
+# Paths and globs here, in `exclude` and in banned_api `allowed` are relative to the
+# project root: with the src/ layout, write "src/hometabs/config.py".
+config_modules = ["src/hometabs/config.py"]  # named config.py: other modules that read the environment are flagged
+# The only modules allowed to print (print-call). Default: every cli.py and __main__.py.
+# output_modules = ["*/cli.py", "*/__main__.py", "src/hometabs/report.py"]
+# swallowed-errors lets `except Exception:` through when it logs the traceback with
+# `logger.exception(...)` (or `exc_info=True`). That works for `logging` and loguru's `logger`;
+# list your own logger objects here (import paths, added to loguru's).
+# logger_objects = ["hometabs.log.logger"]
+# Checks that fail `code-shape check`. Leave out to use the default list (all static
+# checks). History-based checks (change-coupling, concept-spread) and test-mirror are
+# never gates by default: they are trends to watch, not rules to block a PR on.
+# A typo in a check id (or in a limit name) is an error, so no rule is switched off by accident.
+# Removing a gate, adding to skip/exclude, or raising a limit is a "rule loosened": with
+# `code-shape check --base origin/main` (the CI template does this) it is listed for a human.
+# gates = ["file-lines", "function-complexity", ...]
+# skip = ["mypy"]               # check groups to switch off entirely
+# exclude = ["src/hometabs/generated/*"]   # left out of every check
+# Where the baseline lives, relative to the project root (`--baseline FILE` overrides it).
+# baseline = ".code-shape/baseline.json"   # default: .code-shape-baseline.json
+# Names a framework uses by reflection, so vulture wrongly calls them dead code: mention
+# them in a vulture whitelist file (paths relative to the project root; see README,
+# "False positives in dead code"), e.g. a line `Server.should_exit` in vulture_whitelist.py.
+# dead_code_whitelist = ["vulture_whitelist.py"]
+
+[tool.shape.limits]
+# --- files, classes, folders ---
+file_lines = 500        # ~10 screens. Past this a file almost always holds two jobs.
+class_lines = 300       # a class bigger than this is usually several classes.
+package_files = 12      # a folder listing that fits on one screen; beyond it, group by concept.
+package_lines = 4000    # a folder holding more is a sub-system that wants its own sub-packages.
+package_depth = 4       # hometabs/a/b/c is plenty; deeper trees hide code.
+# --- functions ---
+cyclomatic = 10         # McCabe's original threshold (also NIST SP 500-235).
+cognitive = 15          # SonarSource's default for cognitive complexity.
+args = 6                # ruff/pylint default is 5; 6 leaves room for one context object.
+positional_args = 5     # ruff/pylint default. Extra parameters should be keyword-only.
+branches = 12           # ruff/pylint default.
+returns = 6             # ruff/pylint default.
+statements = 50         # ruff/pylint default (statements, not lines: ~60-80 lines).
+nesting = 4             # pylint's default is 5; 4 keeps indentation readable.
+locals = 15             # pylint default.
+bool_expressions = 5    # pylint default.
+# --- classes ---
+class_attributes = 12   # pylint's 7 flags ordinary dataclasses; 12 still catches god objects.
+public_methods = 20     # pylint default.
+# --- duplication and coupling ---
+duplicate_lines = 10    # pylint's 4 is noisy; 10 identical lines is a real copy-paste.
+fan_out = 12            # a module importing more than 12 project modules knows too much.
+dead_code_confidence = 60   # vulture: 60 = also unused functions/classes (90 = imports only).
+# --- history and concepts (tracked, not gated) ---
+concept_files = 5       # a concept mentioned in more files than this is scattered...
+concept_areas = 3       # ...or in more areas (sub-packages / top-level modules) than this.
+coupling_percent = 50   # two files in different areas sharing >= 50% of their commits.
+coupling_min_shared = 3 # ignore pairs that changed together fewer than 3 times.
+max_changeset_files = 30    # ignore bulk commits (code-maat's default) for coupling.
+history_days = 365
+
+# Adapters: an API (a module or a third-party package) that only one place may use.
+# The default rules ban os.environ, os.getenv and os.putenv outside config_modules.
+# Add one line per outside system:  "<import name>" = { msg = "<what to do instead>",
+# allowed = ["<file or glob that may use it>"] }. Examples:
+[tool.shape.banned_api]
+# "stripe" = { msg = "Call Stripe only through hometabs/stripe_client.py.", allowed = ["src/hometabs/stripe_client.py"] }
+# "requests" = { msg = "Use hometabs/http.py (timeouts and retries live there).", allowed = ["src/hometabs/http.py"] }
+# "sqlalchemy" = { msg = "Only hometabs/db/ talks to the database.", allowed = ["src/hometabs/db/*"] }
+"claude_agent_sdk" = { msg = "Talk to the Claude Agent SDK through hometabs/agent.py (models.py only reads its effort levels).", allowed = ["src/hometabs/agent.py", "src/hometabs/models.py"] }
+"httpx" = { msg = "Only hometabs/models.py calls the Anthropic HTTP API; add a function there.", allowed = ["src/hometabs/models.py"] }
+"telegram" = { msg = "Only the hometabs/bot/ package talks to Telegram; pass plain values in and out of it.", allowed = ["src/hometabs/bot/*"] }
+"PIL" = { msg = "Decode and encode images through hometabs/images.py.", allowed = ["src/hometabs/images.py"] }
+"pillow_heif" = { msg = "Decode and encode images through hometabs/images.py.", allowed = ["src/hometabs/images.py"] }
+"dotenv" = { msg = "Only hometabs/config.py loads .env files.", allowed = ["src/hometabs/config.py"] }
+
+# Concepts: name the ideas a change is usually about, so the report can show where each
+# one lives and what changes with it. Terms are case-insensitive regexes; `home` is the
+# module that should own the concept (optional). Examples:
+[tool.shape.concepts]
+# "billing" = { terms = ["invoice", "BillingService"], home = "src/hometabs/billing/service.py" }
+# "users" = ["User\\b", "account"]
+# "export" = ["export", "to_csv"]
+
+# Deliberate error boundaries: functions that may catch every error without logging the
+# traceback, e.g. a background loop that must keep running (offline every minute) or a
+# fallback whose failure is shown to the user. Key: "path/to/module.py:function" or
+# "...:Class.method" (one function, nested ones as "outer.inner"; never a whole file or class),
+# relative to the project root. Value: why, for the reviewer (required). Only that function's
+# catch-alls (bare except, `except Exception`, except-pass/continue) are accepted; every other
+# finding in it still counts. Not for debt: that goes in the baseline. An entry whose function is
+# gone or no longer catches everything is an error, and adding one is a "rule loosened".
+[tool.shape.error_boundaries]
+# "src/hometabs/sync.py:Syncer._loop" = "Runs every minute while offline; a traceback each time is noise."
+
+# Extra command-line arguments per tool, for project-specific needs.
+[tool.shape.extra_args]
+# vulture = ["--ignore-decorators", "@app.route,@cli.command"]
+# deptry = ["--optional-dependencies-dev-groups", "dev"]
+
+# Each contract is one decision from DESIGNING_THE_SHAPE.md, written down so a tool can
+# guard it. Delete the contracts you don't need.
+#
+# The names in the examples are PLACEHOLDERS, shown for a small web shop:
+#   myapp                -> your top-level package
+#   cli, api             -> your entry points (what starts the program: a CLI, web routes, a worker)
+#   orders, inventory    -> your features (one package per concept)
+#   db, stripe_client    -> your adapters (one module or package per outside system)
+#   domain               -> plain data and rules, no I/O (no files, network or database)
+#   config               -> settings
+#   stripe               -> a third-party package that only its adapter may import
+#
+# Existing project with violations? Do NOT weaken the contract. List today's illegal
+# imports under `ignore_imports` (that is import-linter's own baseline), and keep
+# `unmatched_ignore_imports_alerting = "error"` (the default): once an import is fixed,
+# its ignore line must be deleted, so it can't come back.
+
+[tool.importlinter]
+root_package = "hometabs"
+# Lets contracts mention third-party packages (needed for contract 5).
+include_external_packages = true
+
+# 1. Layers: dependencies point one way, from the top of the list to the bottom.
+#    One entry per layer, highest first. `a | b` = same layer, and a and b may not
+#    import each other. Names are modules or packages directly inside hometabs.
+[[tool.importlinter.contracts]]
+id = "layers"
+name = "Layers: __main__ -> bot -> images -> agent | models -> auth | config | formatting | skills"
+type = "layers"
+containers = ["hometabs"]
+# Drafted by `code-shape init` from today's imports: each layer imports only the layers
+# below it. It shows what the code does now; reorder it to what it should do.
+layers = [
+    "__main__",  # entry point (moved up from the bottom layer init drafted)
+    "bot",
+    "images",
+    "agent | models",
+    "auth | config | formatting | skills",
+]
+exhaustive = true                  # a new top-level module fails until you place it in a layer
+broken_contract_guidance = """
+A lower layer imported a higher one. Move the shared code down a layer,
+or pass the dependency in from the caller. Don't add ignore_imports for new code.
+"""
+
+# More contract types from the kit's template, switched off: uncomment the ones
+# you want and replace the placeholder names.
+
+# 2. Features don't import each other. List your feature packages.
+#    (The layers contract above already does this for features written as `a | b`;
+#    use this one when features sit deeper, e.g. myapp.features.orders.)
+# [[tool.importlinter.contracts]]
+# id = "features-independent"
+# name = "Features are independent"
+# type = "independence"
+# modules = ["myapp.orders", "myapp.inventory"]
+
+# 3. Private modules: a module named _something.py may only be imported inside its own
+#    package. Needs no names; works as is.
+# [[tool.importlinter.contracts]]
+# id = "private-modules"
+# name = "Private modules (_name.py) are only imported inside their own package"
+# type = "private_modules"
+
+# 4. Public interface: other code goes through the package (its __init__.py), not its
+#    internals. protected_modules = the internals; allowed_importers = the package itself.
+# [[tool.importlinter.contracts]]
+# id = "db-interface"
+# name = "Everyone goes through myapp.db, not its internals"
+# type = "protected"
+# protected_modules = ["myapp.db.tables", "myapp.db.queries"]
+# allowed_importers = ["myapp.db"]
+
+# 5. One adapter per outside system: a third-party package is imported by one module only.
+#    protected_modules = the third-party package; allowed_importers = its adapter.
+# [[tool.importlinter.contracts]]
+# id = "sdk-in-adapter"
+# name = "The stripe package is only imported by myapp.stripe_client"
+# type = "protected"
+# protected_modules = ["stripe"]
+# allowed_importers = ["myapp.stripe_client"]
+
+# 6. No cycles between sibling modules inside any sub-package. Works as is.
+# [[tool.importlinter.contracts]]
+# id = "no-cycles"
+# name = "No circular imports between sibling modules"
+# type = "acyclic_siblings"
+# ancestors = ["myapp.*"]
