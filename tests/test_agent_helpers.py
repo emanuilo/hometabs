@@ -4,7 +4,6 @@ from hometabs.agent import (
     ASIDE_TOOLS_RULE,
     EXEC_TOOL,
     MEMORY_SEARCH_TOOL,
-    REPL_TOOL,
     SYSTEM_PROMPT,
     BrowsingAgent,
     extract_images,
@@ -26,6 +25,9 @@ def test_extract_images_both_shapes():
         (b"PNGDATA", "image/png"),
     ]
     assert extract_images("text only") == []
+
+
+REPL_TOOL = "mcp__aside__repl"
 
 
 def test_summarize_tool_input():

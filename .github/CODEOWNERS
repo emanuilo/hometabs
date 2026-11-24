@@ -1,0 +1,16 @@
+# Turn on "Require review from Code Owners" in the
+# branch protection rules. Then a pull request that changes the rules can't be merged
+# without a human's approval: an agent can't get a red gate green by loosening them.
+# @emanuilo approves changes to the rules (the people or team who own the shape).
+# Paths are from the repository root; adjust them if you moved a file.
+
+# [tool.shape], [tool.importlinter] and [tool.vulture] live here (or in your --config file)
+/pyproject.toml                 @emanuilo
+# the baseline: known violations (or the path you set in [tool.shape] baseline)
+/.code-shape-baseline.json      @emanuilo
+# dead-code whitelist ([tool.shape] dead_code_whitelist)
+/vulture_whitelist.py           @emanuilo
+# import-linter contracts, if they live in their own file
+/.importlinter                  @emanuilo
+# the CI gate itself
+/.github/workflows/code-shape.yml   @emanuilo

@@ -7,13 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from hometabs.agent import BrowsingAgent, TurnResult
-from hometabs.bot import (
-    BOT_COMMANDS,
-    CALLBACK_DATA_MAX_BYTES,
-    HometabsBot,
-    PreferenceStore,
-    model_callback_data,
-)
+from hometabs.bot import HometabsBot
+from hometabs.bot.app import BOT_COMMANDS, HELP_TEXT
+from hometabs.bot.model_menu import CALLBACK_DATA_MAX_BYTES, model_callback_data
+from hometabs.bot.stores import PreferenceStore
 from hometabs.config import AgentConfig, Settings
 from hometabs.models import ModelInfo
 
@@ -164,7 +161,7 @@ def test_switch_to_model_without_effort_omits_it(bot):
     text, _ = upd.effective_message.replies[-1]
     assert bot.prefs.model == "claude-haiku-4-5-20251001"
     assert "doesn't support effort" in text
-    cfg = bot._agent_config()
+    cfg = bot.chats.agent_config()
     assert cfg.model == "claude-haiku-4-5-20251001" and cfg.effort is None
     assert "--effort" not in _cli_cmd(cfg)
 
@@ -174,7 +171,7 @@ def test_switch_drops_unsupported_level(bot):
     upd = _update()
     run(bot.cmd_model(upd, _ctx("claude-opus-4-5-20251101")))
     assert "doesn't support 'max' effort; using 'high'" in upd.effective_message.replies[-1][0]
-    assert bot._agent_config().effort == "high"
+    assert bot.chats.agent_config().effort == "high"
 
 
 def test_unknown_model_rejected_when_list_known(bot):
@@ -194,7 +191,7 @@ def test_model_without_list_accepts_loose_id(bot):
     run(bot.cmd_model(upd, _ctx("gpt-4")))
     assert bot.prefs.model == "claude-sonnet-5-5"
     run(bot.cmd_model(upd, _ctx("claude-opus-9")))
-    assert bot.prefs.model == "claude-opus-9" and bot._agent_config().effort == "medium"
+    assert bot.prefs.model == "claude-opus-9" and bot.chats.agent_config().effort == "medium"
 
 
 # ── /effort ─────────────────────────────────────────────────────────
@@ -237,7 +234,7 @@ def test_effort_button_sets_level(bot):
     run(bot.on_callback(_update(query=q), _ctx()))
     assert q.answers == ["Effort: high"] and bot.prefs.effort == "high"
     assert "Effort set to high" in q.edits[-1][0]
-    assert bot._agent_config().effort == "high"
+    assert bot.chats.agent_config().effort == "high"
 
 
 # ── applying changes to live agents ─────────────────────────────────
@@ -245,8 +242,8 @@ def test_effort_button_sets_level(bot):
 
 def test_idle_agent_switches_on_next_message_keeping_session(bot, monkeypatch):
     async def scenario():
-        state = bot._chat(CHAT)
-        old = FakeAgent(bot._agent_config(), session_id="sess-1")
+        state = bot.chats.chat(CHAT)
+        old = FakeAgent(bot.chats.agent_config(), session_id="sess-1")
         state.agent = old
         upd = _update()
         await bot.cmd_model(upd, _ctx("claude-opus-4-5-20251101"))
@@ -256,11 +253,11 @@ def test_idle_agent_switches_on_next_message_keeping_session(bot, monkeypatch):
         created = []
 
         def fake_new_agent(chat_id):
-            cfg = bot._agent_config()
-            created.append((cfg, bot.sessions.get(chat_id, bot.fingerprint)))
+            cfg = bot.chats.agent_config()
+            created.append((cfg, bot.chats.sessions.get(chat_id, bot.chats.fingerprint)))
             return FakeAgent(cfg, session_id="sess-1"), False
 
-        monkeypatch.setattr(bot, "_new_agent", fake_new_agent)
+        monkeypatch.setattr(bot.chats, "new_agent", fake_new_agent)
         await bot.on_text(_update(text="hi again"), _ctx())
         assert old.closed
         cfg, resume = created[0]
@@ -271,8 +268,8 @@ def test_idle_agent_switches_on_next_message_keeping_session(bot, monkeypatch):
 
 def test_model_command_does_not_wait_for_queued_turn(bot):
     async def scenario():
-        state = bot._chat(CHAT)
-        state.agent = FakeAgent(bot._agent_config(), session_id="sess-1")
+        state = bot.chats.chat(CHAT)
+        state.agent = FakeAgent(bot.chats.agent_config(), session_id="sess-1")
         await state.lock.acquire()  # running turn
         waiter = asyncio.ensure_future(state.lock.acquire())  # queued message
         await asyncio.sleep(0)
@@ -286,8 +283,8 @@ def test_model_command_does_not_wait_for_queued_turn(bot):
 
 def test_change_during_running_turn_applies_after_it(bot, monkeypatch):
     async def scenario():
-        state = bot._chat(CHAT)
-        old = FakeAgent(bot._agent_config(), session_id="sess-1")
+        state = bot.chats.chat(CHAT)
+        old = FakeAgent(bot.chats.agent_config(), session_id="sess-1")
         state.agent = old
         await state.lock.acquire()  # a turn is running
         upd = _update()
@@ -299,11 +296,11 @@ def test_change_during_running_turn_applies_after_it(bot, monkeypatch):
         created = []
 
         def fake_new_agent(chat_id):
-            cfg = bot._agent_config()
-            created.append((cfg, bot.sessions.get(chat_id, bot.fingerprint)))
+            cfg = bot.chats.agent_config()
+            created.append((cfg, bot.chats.sessions.get(chat_id, bot.chats.fingerprint)))
             return FakeAgent(cfg, session_id="sess-1"), False
 
-        monkeypatch.setattr(bot, "_new_agent", fake_new_agent)
+        monkeypatch.setattr(bot.chats, "new_agent", fake_new_agent)
         await bot.on_text(_update(text="what did I say?"), _ctx())
         assert old.closed
         cfg, resume = created[0]
@@ -314,9 +311,9 @@ def test_change_during_running_turn_applies_after_it(bot, monkeypatch):
 
 
 def test_fingerprint_ignores_model_and_effort(bot):
-    fp = bot.fingerprint
+    fp = bot.chats.fingerprint
     bot.prefs.update(model="claude-haiku-4-5-20251001", effort="low")
-    assert HometabsBot(bot.settings).fingerprint == fp
+    assert HometabsBot(bot.settings).chats.fingerprint == fp
 
 
 def _cli_cmd(cfg, resume=None):
@@ -328,9 +325,9 @@ def _cli_cmd(cfg, resume=None):
 
 
 def test_new_agent_resumes_with_selected_options(bot):
-    bot.sessions.set(CHAT, "sess-9", bot.fingerprint)
+    bot.chats.sessions.set(CHAT, "sess-9", bot.chats.fingerprint)
     bot.prefs.update(model="claude-opus-4-5-20251101", effort="low")
-    agent, stale = bot._new_agent(CHAT)
+    agent, stale = bot.chats.new_agent(CHAT)
     assert not stale
     cmd = _cli_cmd(agent.config, resume=agent._resume)
     assert cmd[cmd.index("--model") + 1] == "claude-opus-4-5-20251101"
@@ -370,15 +367,13 @@ def test_preferences_defaults_and_bad_file(tmp_path):
 
 
 def test_command_menu_and_help():
-    from hometabs.bot import HELP_TEXT
-
     assert [c.command for c in BOT_COMMANDS] == ["start", "new", "stop", "model", "effort"]
     assert "/model" in HELP_TEXT and "/effort" in HELP_TEXT
 
 
 def test_bot_builds_plugin_in_state_dir(bot, tmp_path):
-    assert bot.plugin.path == (tmp_path / "plugin").resolve()
-    cfg = bot._agent_config()
-    assert cfg.plugin_dir == bot.plugin.path
+    assert bot.chats.plugin.path == (tmp_path / "plugin").resolve()
+    cfg = bot.chats.agent_config()
+    assert cfg.plugin_dir == bot.chats.plugin.path
     assert cfg.skills == ("hometabs:sign-in", "hometabs:1password")
     assert "Skill(hometabs:1password)" in _cli_cmd(cfg)[_cli_cmd(cfg).index("--allowedTools") + 1]

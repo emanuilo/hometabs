@@ -12,7 +12,6 @@ from PIL import Image as PILImage
 from hometabs.agent import BrowsingAgent, Image, _single_message, build_user_message, image_block
 from hometabs.config import AgentConfig
 from hometabs.images import (
-    HEIF_SUPPORTED,
     MAX_EDGE,
     ImageError,
     normalize_image,
@@ -90,7 +89,6 @@ def test_garbage_is_rejected_with_a_message():
         normalize_image(b"definitely not an image")
 
 
-@pytest.mark.skipif(not HEIF_SUPPORTED, reason="pillow-heif not installed")
 def test_heic_becomes_jpeg():
     data = _encode(PILImage.new("RGB", (80, 60), "purple"), "HEIF")
     out = normalize_image(data)

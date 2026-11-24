@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 
 from loguru import logger
@@ -12,13 +11,13 @@ __all__ = ["main"]
 
 def main() -> None:
     """Console entry point: ``uv run hometabs``."""
-    from .auth import log_auth_choice, scrub_process_env
-    from .config import ConfigError, load_settings
+    from .auth import SCRUBBED_ENV_VARS, log_auth_choice
+    from .config import ConfigError, load_settings, log_level, unset_env_vars
 
     logger.remove()
     # diagnose=False: loguru would otherwise print local variable values in
     # tracebacks, and python-telegram-bot's Bot repr contains the bot token.
-    logger.add(sys.stderr, level=os.environ.get("LOG_LEVEL", "INFO"), diagnose=False)
+    logger.add(sys.stderr, level=log_level(), diagnose=False)
 
     try:
         settings = load_settings()
@@ -29,9 +28,9 @@ def main() -> None:
     # The SDK merges options.env over os.environ, so credentials must be
     # removed from this process too (the chosen credential was already
     # captured into settings and is re-injected explicitly for the CLI).
-    scrub_process_env()
+    unset_env_vars(SCRUBBED_ENV_VARS)
     log_auth_choice(settings.agent.api_key, settings.agent.oauth_token)
-    if os.environ.get("ANTHROPIC_BASE_URL"):
+    if settings.anthropic_base_url:
         logger.warning("ANTHROPIC_BASE_URL is set; the Claude CLI will use it")
     logger.info(
         "Starting Hometabs (default model={}, default effort={}, aside={}, allowed users={})",
@@ -41,13 +40,10 @@ def main() -> None:
         sorted(settings.allowed_user_ids),
     )
 
-    from telegram.error import InvalidToken
-
     from .bot import HometabsBot
 
-    app = HometabsBot(settings).build_application()
     try:
-        app.run_polling(allowed_updates=["message", "callback_query"], drop_pending_updates=True)
-    except InvalidToken:
-        logger.error("Telegram rejected TELEGRAM_BOT_TOKEN; check the token from @BotFather.")
+        HometabsBot(settings).run()
+    except ConfigError as exc:
+        logger.error("{}", exc)
         raise SystemExit(2) from None

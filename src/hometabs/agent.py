@@ -13,12 +13,14 @@ import datetime as _dt
 import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeGuard, get_args
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    EffortLevel,
+    Message,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -33,7 +35,6 @@ from .config import AgentConfig
 from .skills import SkillPlugin
 
 MCP_SERVER_NAME = "aside"
-REPL_TOOL = f"mcp__{MCP_SERVER_NAME}__repl"
 MEMORY_SEARCH_TOOL = f"mcp__{MCP_SERVER_NAME}__memory_search"
 EXEC_TOOL = f"mcp__{MCP_SERVER_NAME}__exec"
 # Permission rule matching every tool of the aside MCP server, including
@@ -180,37 +181,55 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def summarize_tool_input(name: str, tool_input: dict[str, Any], limit: int = 80) -> str:
-    """A short one-line description of a tool call for progress messages."""
-    if not isinstance(tool_input, dict):
-        tool_input = {}
-    title = tool_input.get("title")  # aside's repl takes a human-readable title
-    if isinstance(title, str) and title.strip():
-        title = title.strip()
-        return title if len(title) <= limit else title[: limit - 1] + "…"
+def _text(value: Any) -> str | None:
+    """*value* stripped, or None unless it is a non-blank string."""
+    return (value.strip() or None) if isinstance(value, str) else None
+
+
+def _summarize_memory_search(tool_input: dict[str, Any]) -> str:
+    queries = tool_input.get("queries")
+    query = _text(queries[0]) if isinstance(queries, list) and queries else None
+    return f"memory: {query}" if query else "memory search"
+
+
+def _summarize_exec(tool_input: dict[str, Any]) -> str:
+    prompt = _text(tool_input.get("prompt"))
+    return f"Aside agent: {' '.join(prompt.split())}" if prompt else "Aside agent"
+
+
+def _summarize_code(code: str) -> str:
+    """The first line of JavaScript that isn't blank or a comment."""
+    for line in code.splitlines():
+        line = line.strip()
+        if line and not line.startswith("//"):
+            return line
+    return "(js)"
+
+
+_TOOL_SUMMARIES: dict[str, Callable[[dict[str, Any]], str]] = {
+    MEMORY_SEARCH_TOOL: _summarize_memory_search,
+    EXEC_TOOL: _summarize_exec,
+}
+
+
+def _summary(name: str, tool_input: dict[str, Any]) -> str:
+    title = _text(tool_input.get("title"))  # aside's repl takes a human-readable title
+    if title:
+        return title
     skill = tool_input.get("skill")  # the Skill tool takes the skill's name
     if name == "Skill" and isinstance(skill, str) and skill:
         return f"skill: {skill.rsplit(':', 1)[-1]}"
-    if name == MEMORY_SEARCH_TOOL:
-        queries = tool_input.get("queries")
-        query = queries[0] if isinstance(queries, list) and queries else None
-        if isinstance(query, str) and query.strip():
-            return _clip(f"memory: {query.strip()}", limit)
-        return "memory search"
-    if name == EXEC_TOOL:
-        prompt = tool_input.get("prompt")
-        if isinstance(prompt, str) and prompt.strip():
-            return _clip(f"Aside agent: {' '.join(prompt.split())}", limit)
-        return "Aside agent"
+    if name in _TOOL_SUMMARIES:
+        return _TOOL_SUMMARIES[name](tool_input)
     code = tool_input.get("code")
     if isinstance(code, str):
-        for line in code.splitlines():
-            line = line.strip()
-            if line and not line.startswith("//"):
-                return line if len(line) <= limit else line[: limit - 1] + "…"
-        return "(js)"
-    short = name.removeprefix("mcp__")
-    return short
+        return _summarize_code(code)
+    return name.removeprefix("mcp__")
+
+
+def summarize_tool_input(name: str, tool_input: Any, limit: int = 80) -> str:
+    """A short one-line description of a tool call for progress messages."""
+    return _clip(_summary(name, tool_input if isinstance(tool_input, dict) else {}), limit)
 
 
 def extract_images(content: Any) -> list[Image]:
@@ -226,7 +245,9 @@ def extract_images(content: Any) -> list[Image]:
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "image":
             continue
-        source = block.get("source") if isinstance(block.get("source"), dict) else block
+        source = block.get("source")
+        if not isinstance(source, dict):
+            source = block
         data = source.get("data")
         media_type = source.get("media_type") or source.get("mimeType") or "image/png"
         if not isinstance(data, str):
@@ -249,7 +270,6 @@ class BrowsingAgent:
         self._resume = resume
         self._client: ClaudeSDKClient | None = None
         self.session_id: str | None = resume
-        self.init_info: dict[str, Any] = {}
         self.auth_mode: str | None = None
 
     # -- options --------------------------------------------------------
@@ -258,7 +278,7 @@ class BrowsingAgent:
         env, self.auth_mode = build_cli_env(self.config.api_key, self.config.oauth_token)
         return ClaudeAgentOptions(
             model=self.config.model,
-            effort=self.config.effort,  # type: ignore[arg-type]
+            effort=_effort_option(self.config.effort),
             system_prompt=SYSTEM_PROMPT.format(today=_dt.date.today().isoformat()),
             mcp_servers={
                 MCP_SERVER_NAME: {
@@ -294,10 +314,6 @@ class BrowsingAgent:
 
     # -- lifecycle ------------------------------------------------------
 
-    @property
-    def connected(self) -> bool:
-        return self._client is not None
-
     async def connect(self) -> None:
         if self._client is not None:
             return
@@ -326,8 +342,8 @@ class BrowsingAgent:
         if client is not None:
             try:
                 await client.disconnect()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Error while disconnecting agent: {}", exc)
+            except Exception:
+                logger.exception("Error while disconnecting agent")
 
     async def interrupt(self) -> bool:
         """Interrupt the running turn. Returns False if nothing is connected."""
@@ -353,62 +369,100 @@ class BrowsingAgent:
         else:
             await self._client.query(prompt)
 
-        result = TurnResult(text="")
-        last_text: list[str] = []
-        step = 0
+        turn = _Turn(on_tool, self.session_id)
         async for msg in self._client.receive_response():
-            if isinstance(msg, SystemMessage):
-                if msg.subtype == "init":
-                    self.init_info = dict(msg.data)
-                    logger.info(
-                        "CLI init: model={} apiKeySource={} mcp={}",
-                        msg.data.get("model"),
-                        msg.data.get("apiKeySource"),
-                        msg.data.get("mcp_servers"),
-                    )
-            elif isinstance(msg, AssistantMessage):
-                result.model = msg.model or result.model
-                if msg.error:
-                    result.errors.append(str(msg.error))
-                texts = [b.text for b in msg.content if isinstance(b, TextBlock)]
-                if texts and msg.parent_tool_use_id is None:
-                    last_text = texts
-                for block in msg.content:
-                    if isinstance(block, ToolUseBlock):
-                        step += 1
-                        result.tool_calls.append(block.name)
-                        summary = summarize_tool_input(block.name, block.input)
-                        logger.info("Tool step {}: {} {}", step, block.name, summary)
-                        if on_tool is not None:
-                            try:
-                                await on_tool(ToolStep(step, block.name, summary))
-                            except Exception as exc:  # noqa: BLE001
-                                logger.debug("progress callback failed: {}", exc)
-            elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
-                for block in msg.content:
-                    if isinstance(block, ToolResultBlock):
-                        result.images.extend(extract_images(block.content))
-            elif isinstance(msg, ResultMessage):
-                self.session_id = msg.session_id or self.session_id
-                result.session_id = self.session_id
-                result.is_error = msg.is_error
-                result.num_turns = msg.num_turns
-                result.duration_ms = msg.duration_ms
-                result.errors.extend(msg.errors or [])
-                reason = msg.terminal_reason or ""
-                result.interrupted = reason.startswith("aborted")
-                if msg.result:
-                    result.text = msg.result
-                if msg.model_usage and not result.model:
-                    result.model = next(iter(msg.model_usage))
-                logger.info(
-                    "Turn done: subtype={} turns={} {}ms terminal={} cost_usd={}",
-                    msg.subtype,
-                    msg.num_turns,
-                    msg.duration_ms,
-                    reason,
-                    msg.total_cost_usd,
-                )
-        if not result.text:
-            result.text = "\n\n".join(last_text).strip()
-        return result
+            await turn.handle(msg)
+        self.session_id = turn.session_id
+        return turn.finish()
+
+
+def _effort_option(level: str | None) -> EffortLevel | None:
+    """The configured effort as the SDK's type; an unknown level is left out."""
+    if level is None or _is_effort_level(level):
+        return level
+    logger.warning("Ignoring unknown effort level {!r}", level)
+    return None
+
+
+def _is_effort_level(level: str) -> TypeGuard[EffortLevel]:
+    return level in get_args(EffortLevel)
+
+
+class _Turn:
+    """Collects the messages of one turn into a :class:`TurnResult`."""
+
+    def __init__(self, on_tool: ProgressCallback | None, session_id: str | None) -> None:
+        self.on_tool = on_tool
+        self.session_id = session_id  # the conversation's, updated by the result
+        self.result = TurnResult(text="")
+        self.last_text: list[str] = []
+        self.step = 0
+
+    async def handle(self, msg: Message) -> None:
+        if isinstance(msg, SystemMessage) and msg.subtype == "init":
+            logger.info(
+                "CLI init: model={} apiKeySource={} mcp={}",
+                msg.data.get("model"),
+                msg.data.get("apiKeySource"),
+                msg.data.get("mcp_servers"),
+            )
+        elif isinstance(msg, AssistantMessage):
+            await self._assistant(msg)
+        elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
+            for block in msg.content:
+                if isinstance(block, ToolResultBlock):
+                    self.result.images.extend(extract_images(block.content))
+        elif isinstance(msg, ResultMessage):
+            self._finished(msg)
+
+    async def _assistant(self, msg: AssistantMessage) -> None:
+        result = self.result
+        result.model = msg.model or result.model
+        if msg.error:
+            result.errors.append(str(msg.error))
+        texts = [b.text for b in msg.content if isinstance(b, TextBlock)]
+        if texts and msg.parent_tool_use_id is None:
+            self.last_text = texts
+        for block in msg.content:
+            if isinstance(block, ToolUseBlock):
+                await self._tool_step(block)
+
+    async def _tool_step(self, block: ToolUseBlock) -> None:
+        self.step += 1
+        self.result.tool_calls.append(block.name)
+        summary = summarize_tool_input(block.name, block.input)
+        logger.info("Tool step {}: {} {}", self.step, block.name, summary)
+        if self.on_tool is None:
+            return
+        try:
+            await self.on_tool(ToolStep(self.step, block.name, summary))
+        except Exception:
+            logger.exception("progress callback failed")
+
+    def _finished(self, msg: ResultMessage) -> None:
+        result = self.result
+        self.session_id = msg.session_id or self.session_id
+        result.session_id = self.session_id
+        result.is_error = msg.is_error
+        result.num_turns = msg.num_turns
+        result.duration_ms = msg.duration_ms
+        result.errors.extend(msg.errors or [])
+        reason = msg.terminal_reason or ""
+        result.interrupted = reason.startswith("aborted")
+        if msg.result:
+            result.text = msg.result
+        if msg.model_usage and not result.model:
+            result.model = next(iter(msg.model_usage))
+        logger.info(
+            "Turn done: subtype={} turns={} {}ms terminal={} cost_usd={}",
+            msg.subtype,
+            msg.num_turns,
+            msg.duration_ms,
+            reason,
+            msg.total_cost_usd,
+        )
+
+    def finish(self) -> TurnResult:
+        if not self.result.text:
+            self.result.text = "\n\n".join(self.last_text).strip()
+        return self.result

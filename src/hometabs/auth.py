@@ -3,9 +3,9 @@
 The Agent SDK shells out to the Claude Code CLI and *merges* ``options.env``
 over the parent process environment, so passing a scrubbed dict alone is not
 enough to keep a stray credential out of the subprocess. We therefore
-(1) remove every credential / provider var from ``os.environ`` of this
-(dedicated) bot process and (2) pass an explicit env that contains exactly
-the one credential chosen here.
+(1) remove every credential / provider var in :data:`SCRUBBED_ENV_VARS` from
+the environment of this (dedicated) bot process at startup and (2) pass an
+explicit env that contains exactly the one credential chosen here.
 
 Precedence:
 - ``api_key``      -> ANTHROPIC_API_KEY from the Claude Console (recommended)
@@ -15,8 +15,6 @@ Precedence:
 
 from __future__ import annotations
 
-import os
-from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 
 from loguru import logger
@@ -70,42 +68,18 @@ def select_credential(api_key: str | None, oauth_token: str | None) -> Credentia
     return Credential(AUTH_MODE_LOCAL)
 
 
-def scrub_env(env: Mapping[str, str]) -> dict[str, str]:
-    """Return a copy of *env* without any credential / provider-routing vars."""
-    return {k: v for k, v in env.items() if k not in SCRUBBED_ENV_VARS}
+def build_cli_env(api_key: str | None, oauth_token: str | None) -> tuple[dict[str, str], str]:
+    """Build ``options.env`` for the Claude CLI subprocess.
 
-
-def scrub_process_env(environ: MutableMapping[str, str] | None = None) -> list[str]:
-    """Remove credential vars from the live process env (default ``os.environ``).
-
-    Needed because the SDK merges ``options.env`` *over* ``os.environ``.
-    Returns the names that were removed (values are never returned/logged).
-    """
-    environ = os.environ if environ is None else environ
-    removed = [k for k in SCRUBBED_ENV_VARS if k in environ]
-    for k in removed:
-        del environ[k]
-    return removed
-
-
-def build_cli_env(
-    api_key: str | None,
-    oauth_token: str | None,
-    base_env: Mapping[str, str] | None = None,
-) -> tuple[dict[str, str], str]:
-    """Build the env for the Claude CLI subprocess.
-
-    Scrubs every credential var from *base_env* (default ``os.environ``) and
-    injects exactly the credential chosen by :func:`select_credential`
-    (``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN``), or none for the
-    local Claude Code login.
+    It holds exactly the credential chosen by :func:`select_credential`
+    (``ANTHROPIC_API_KEY`` or ``CLAUDE_CODE_OAUTH_TOKEN``), or nothing for the
+    local Claude Code login. The SDK merges it over ``os.environ``, which
+    ``main()`` scrubbed of :data:`SCRUBBED_ENV_VARS` at startup.
 
     Returns ``(env, auth_mode)``.
     """
-    env = scrub_env(os.environ if base_env is None else base_env)
     cred = select_credential(api_key, oauth_token)
-    if cred.secret is not None:
-        env[_MODE_ENV_VAR[cred.mode]] = cred.secret
+    env = {_MODE_ENV_VAR[cred.mode]: cred.secret} if cred.secret is not None else {}
     return env, cred.mode
 
 

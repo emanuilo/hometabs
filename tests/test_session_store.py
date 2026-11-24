@@ -1,7 +1,7 @@
 import json
 
 from hometabs.agent import instructions_fingerprint
-from hometabs.bot import SessionStore
+from hometabs.bot.stores import SessionStore
 
 
 def test_resumes_only_matching_fingerprint(tmp_path):

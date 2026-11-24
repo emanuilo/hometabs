@@ -256,7 +256,7 @@ effort support), and the bot tells you.
 flowchart LR
     phone["Telegram app<br/>(your phone)"] <--> tg["Telegram Bot API"]
     subgraph mac["Your Mac"]
-        bot["bot.py<br/>allowlist, per-chat queue,<br/>progress, formatting"]
+        bot["bot/<br/>allowlist, per-chat queue,<br/>progress, formatting"]
         agent["agent.py<br/>BrowsingAgent<br/>(ClaudeSDKClient per chat)"]
         state[(".state/<br/>sessions, settings,<br/>model cache, plugin")]
         cli["Claude Code CLI<br/>(bundled with the SDK)"]
@@ -356,15 +356,22 @@ uv sync
 uv run pytest               # tests (no network, keys, Aside or Telegram needed)
 uv run ruff check           # lint
 uv run ruff format          # format
+uv run code-shape check     # shape gates (Python 3.11+): sizes, layers, dead code, types
 ```
 
 ```
 src/hometabs/
   __init__.py    # entry point: logging, config, env scrubbing, polling
   agent.py       # agent core (no Telegram): ClaudeSDKClient + aside MCP
-  auth.py        # credential choice and the scrubbed env for the Claude CLI
-  bot.py         # Telegram handlers, per-chat locks, progress, /model, /effort
-  config.py      # .env loading and validation
+  auth.py        # credential choice and the credential env for the Claude CLI
+  bot/           # the Telegram bot:
+    app.py         # handlers, the per-chat turn queue
+    chats.py       # per-chat agents, locks and saved sessions
+    media.py       # incoming photos/files and albums
+    model_menu.py  # /model and /effort: texts, buttons, the choice
+    replies.py     # sending replies, images, typing and progress
+    stores.py      # sessions.json and settings.json
+  config.py      # .env loading and validation; the only reader of the environment
   formatting.py  # message splitting, Markdown -> Telegram HTML
   images.py      # incoming images: size limits, conversion, downscaling
   models.py      # /v1/models discovery (model list, effort levels, cache)

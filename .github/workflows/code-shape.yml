@@ -1,0 +1,58 @@
+# - On every PR: ENFORCE mode. Fails only on NEW or WORSE violations (the baseline
+#   holds the old ones), and when an improvement isn't locked into the baseline.
+#   It also lists every rule the PR loosens (baseline entries added, limits raised,
+#   gates or contracts removed, allowances widened, suppression comments added...)
+#   at the top of the run's summary page. That list is a warning, not a failure:
+#   a human reviews it. The kit's CODEOWNERS template makes that review required.
+# - Weekly and on demand: REPORT mode with git-history trends, uploaded as an artifact.
+name: Code shape
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  check:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the PR's base branch, to compare the rules with
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The project must be installed too: mypy and deptry need its dependencies.
+      - name: Install project and code-shape-kit
+        run: pip install -e . "code-shape-kit[tools] @ git+https://github.com/emanuilo/code-shape-kit@v0.3.0"
+      # On a PR, --base compares the rules with the PR's base branch and --summary puts the
+      # "Rules loosened" warning on the run's summary page. On a push there is no base.
+      - name: Code shape gates
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: code-shape check ${BASE_REF:+--base "origin/$BASE_REF" --summary "$GITHUB_STEP_SUMMARY"}
+
+  report:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for change coupling and trends
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install project and code-shape-kit
+        run: pip install -e . "code-shape-kit[tools] @ git+https://github.com/emanuilo/code-shape-kit@v0.3.0"
+      - name: Code shape report
+        run: code-shape report --trend 8 --out code-shape-report.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-shape-report
+          path: code-shape-report.md
+      - name: Show report in the run summary
+        run: cat code-shape-report.md >> "$GITHUB_STEP_SUMMARY"

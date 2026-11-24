@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Development: [code-shape-kit](https://github.com/emanuilo/code-shape-kit)
+  checks the code's shape (`uv run code-shape check`, Python 3.11+; also in
+  CI). `bot.py` is now the `hometabs.bot` package, and only `config.py` reads
+  the environment. An unknown `HOMETABS_EFFORT` is now dropped with a warning
+  instead of being passed to the Claude CLI.
+
 - Renamed the project to **Hometabs**: distribution and console command
   `hometabs` (`uv run hometabs`, `python -m hometabs`), Python package
   `hometabs`, repository `github.com/emanuilo/hometabs`.
