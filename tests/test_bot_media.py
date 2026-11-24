@@ -10,9 +10,11 @@ from PIL import Image as PILImage
 from telegram import Chat, Document, Message, PhotoSize, Update, User
 from telegram.error import BadRequest
 
-import hometabs.bot as botmod
+import hometabs.bot.media as mediamod
 from hometabs.agent import TurnResult
-from hometabs.bot import DEFAULT_IMAGE_PROMPT, UNSUPPORTED_TEXT, HometabsBot, media_ref
+from hometabs.bot import HometabsBot
+from hometabs.bot.app import UNSUPPORTED_TEXT
+from hometabs.bot.media import DEFAULT_IMAGE_PROMPT, media_ref
 from hometabs.config import AgentConfig, Settings
 
 ALLOWED, STRANGER, CHAT = 1, 2, 100
@@ -112,9 +114,9 @@ def bot(tmp_path, aside_skills_dir, monkeypatch):
         state_file=tmp_path / "sessions.json",
     )
     b = HometabsBot(settings)
-    b.agent = FakeAgent(b._agent_config())
-    monkeypatch.setattr(b, "_new_agent", lambda chat_id: (b.agent, False))
-    monkeypatch.setattr(botmod, "ALBUM_DEBOUNCE_S", 0.05)
+    b.agent = FakeAgent(b.chats.agent_config())
+    monkeypatch.setattr(b.chats, "new_agent", lambda chat_id: (b.agent, False))
+    monkeypatch.setattr(mediamod, "ALBUM_DEBOUNCE_S", 0.05)
     return b
 
 
@@ -212,7 +214,7 @@ def test_album_items_become_one_turn(bot):
     ((prompt, images),) = bot.agent.calls
     assert prompt == "Compare these" and len(images) == 2
     assert tg.downloads == ["a", "b"]  # sorted by message id
-    assert tg.sent == ["saw 2"] and not bot._albums
+    assert tg.sent == ["saw 2"] and not bot.albums._pending
 
 
 def test_different_albums_are_separate_turns(bot):
@@ -239,7 +241,7 @@ def test_stop_during_album_debounce_drops_it(bot):
             )
         )
         await asyncio.sleep(0.01)
-        bot._chat(CHAT).epoch += 1  # what /stop does
+        bot.chats.chat(CHAT).epoch += 1  # what /stop does
         await task
 
     run(scenario())

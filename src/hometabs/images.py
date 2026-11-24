@@ -9,20 +9,16 @@ the result is kept well under the size limit.
 from __future__ import annotations
 
 import io
+import struct
 
 from loguru import logger
 from PIL import Image as PILImage
 from PIL import ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
 
 from .agent import Image
 
-try:  # HEIC/HEIF (iPhone photos sent as files); optional.
-    from pillow_heif import register_heif_opener
-
-    register_heif_opener()
-    HEIF_SUPPORTED = True
-except ImportError:  # pragma: no cover - depends on the install
-    HEIF_SUPPORTED = False
+register_heif_opener()  # HEIC/HEIF: iPhone photos sent as files
 
 # Telegram's Bot API only lets bots download files up to 20 MB.
 TELEGRAM_DOWNLOAD_LIMIT = 20 * 1024 * 1024
@@ -79,18 +75,17 @@ def normalize_image(
     except PILImage.DecompressionBombError as exc:
         raise ImageError("That image has too many pixels to process.") from exc
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as exc:
-        hint = "" if HEIF_SUPPORTED else " (HEIC needs the optional pillow-heif package)"
-        raise ImageError(f"I couldn't read that image; its format isn't supported{hint}.") from exc
+        raise ImageError("I couldn't read that image; its format isn't supported.") from exc
 
     media_type = SUPPORTED_MEDIA_TYPES.get(fmt)
     oriented = _orientation(img) in (None, 1)
     if media_type is not None and oriented and max(img.size) <= max_edge and len(data) <= max_bytes:
         return Image(bytes(data), media_type)
 
-    img = ImageOps.exif_transpose(img)  # also takes the first frame of animations
-    if max(img.size) > max_edge:
-        img.thumbnail((max_edge, max_edge), PILImage.Resampling.LANCZOS)
-    out = _encode(img, prefer_png=fmt == "PNG", max_bytes=max_bytes)
+    upright = ImageOps.exif_transpose(img)  # also takes the first frame of animations
+    if max(upright.size) > max_edge:
+        upright.thumbnail((max_edge, max_edge), PILImage.Resampling.LANCZOS)
+    out = _encode(upright, prefer_png=fmt == "PNG", max_bytes=max_bytes)
     logger.debug("Normalized {} image ({} bytes) -> {}", fmt or "?", len(data), out.media_type)
     return out
 
@@ -98,7 +93,9 @@ def normalize_image(
 def _orientation(img: PILImage.Image) -> int | None:
     try:
         return img.getexif().get(_EXIF_ORIENTATION)
-    except Exception:  # noqa: BLE001 - broken EXIF shouldn't block the image
+    except (OSError, SyntaxError, ValueError, struct.error) as exc:
+        # Broken EXIF shouldn't block the image.
+        logger.debug("Ignoring unreadable EXIF: {}", exc)
         return None
 
 

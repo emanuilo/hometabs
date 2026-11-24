@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -67,6 +68,24 @@ class Settings:
     allowed_user_ids: frozenset[int]
     agent: AgentConfig = field(default_factory=AgentConfig)
     state_file: Path = Path(".state/sessions.json")
+    # Set when the Claude CLI is routed to another endpoint (logged at startup).
+    anthropic_base_url: str | None = None
+
+
+def log_level() -> str:
+    """The loguru level from LOG_LEVEL (read before .env is loaded)."""
+    return os.environ.get("LOG_LEVEL", "INFO")
+
+
+def unset_env_vars(names: Iterable[str]) -> list[str]:
+    """Remove *names* from this process's environment.
+
+    Returns the names that were set (values are never returned or logged).
+    """
+    removed = [name for name in names if name in os.environ]
+    for name in removed:
+        del os.environ[name]
+    return removed
 
 
 def _path_env(name: str, default: Path) -> Path:
@@ -112,4 +131,5 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         allowed_user_ids=allowed,
         agent=agent,
         state_file=state_file,
+        anthropic_base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
     )

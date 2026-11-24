@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from hometabs.config import (
     ConfigError,
     load_settings,
     parse_allowed_user_ids,
+    unset_env_vars,
 )
 
 
@@ -143,3 +145,22 @@ def test_dotenv_default_search_is_never_used(monkeypatch, clean_env, tmp_path):
     monkeypatch.chdir(tmp_path)
     C.load_agent_config()
     assert calls == []
+
+
+def test_unset_env_vars_removes_only_the_given_names(monkeypatch):
+    monkeypatch.setenv("HOMETABS_TEST_SECRET", "x")
+    monkeypatch.setenv("HOMETABS_TEST_KEEP", "y")
+    monkeypatch.delenv("HOMETABS_TEST_UNSET", raising=False)
+    removed = unset_env_vars(["HOMETABS_TEST_SECRET", "HOMETABS_TEST_UNSET"])
+    assert removed == ["HOMETABS_TEST_SECRET"]
+    assert "HOMETABS_TEST_SECRET" not in os.environ
+    assert os.environ["HOMETABS_TEST_KEEP"] == "y"
+
+
+def test_base_url_is_captured(monkeypatch, clean_env):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("ALLOWED_USER_IDS", "1")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    assert load_settings(clean_env).anthropic_base_url is None
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example")
+    assert load_settings(clean_env).anthropic_base_url == "https://proxy.example"

@@ -9,8 +9,8 @@ Auth follows :func:`hometabs.auth.select_credential`: an API key is sent as
 ``x-api-key``, an OAuth token (``CLAUDE_CODE_OAUTH_TOKEN``) as a bearer token,
 both to api.anthropic.com only. With neither (local Claude Code login) there
 is no credential to send, so no request is made. The list is cached in the
-state dir for a day; any failure falls back to the last cached list (even a
-stale one), or to an empty list, never to an exception.
+state dir for a day; a network or response error falls back to the last
+cached list (even a stale one), or to an empty list, never to an exception.
 
 Ported from memclaw's ``anthropic_models.py`` (PR #11).
 """
@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from claude_agent_sdk import ClaudeAgentOptions
+from claude_agent_sdk import EffortLevel
 from loguru import logger
 
 from .auth import AUTH_MODE_API_KEY, AUTH_MODE_OAUTH, Credential, select_credential
@@ -43,30 +43,8 @@ MAX_PAGES = 10
 CACHE_FILENAME = "models_cache.json"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 
-_FALLBACK_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-
-
-def _sdk_effort_levels() -> tuple[str, ...]:
-    """Effort levels the installed SDK accepts, read off the type of
-    ``ClaudeAgentOptions.effort`` (``Optional[Literal[...]]``), lowest first."""
-    try:
-        hint = typing.get_type_hints(ClaudeAgentOptions)["effort"]
-        levels: list[str] = []
-        stack = [hint]
-        while stack:
-            t = stack.pop(0)
-            if typing.get_origin(t) is typing.Literal:
-                levels.extend(a for a in typing.get_args(t) if isinstance(a, str))
-            else:
-                stack.extend(typing.get_args(t))
-        if levels:
-            return tuple(dict.fromkeys(levels))
-    except Exception:  # noqa: BLE001
-        pass
-    return _FALLBACK_EFFORT_LEVELS
-
-
-SDK_EFFORT_LEVELS: tuple[str, ...] = _sdk_effort_levels()
+# The effort levels the installed SDK accepts, lowest first.
+SDK_EFFORT_LEVELS: tuple[str, ...] = typing.get_args(EffortLevel)
 
 
 @dataclass
@@ -183,7 +161,7 @@ def read_cache(path: Path, max_age: float | None = CACHE_TTL_SECONDS) -> list[Mo
             )
             for e in raw["models"]
         ]
-    except Exception:  # noqa: BLE001
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
@@ -209,7 +187,7 @@ class ModelCatalog:
         # Last known list (possibly stale) so lookups never need the network.
         self.models: list[ModelInfo] = read_cache(cache_path, max_age=None) or []
 
-    async def refresh(self, force: bool = False) -> list[ModelInfo]:
+    async def refresh(self, *, force: bool = False) -> list[ModelInfo]:
         """Return a fresh list if possible, else the last known one (maybe [])."""
         if not force:
             cached = read_cache(self.cache_path)
@@ -220,7 +198,8 @@ class ModelCatalog:
             return self.models
         try:
             models = await fetch_models(self._credential)
-        except Exception as exc:  # noqa: BLE001 - never log the request (headers)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            # Only the type: the request (and its headers) must never be logged.
             logger.warning("Could not fetch the model list: {}", type(exc).__name__)
             return self.models
         if models:
